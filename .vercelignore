@@ -1,0 +1,13 @@
+# Heavy local-only assets not needed by the web build.
+# pnpm workspace members (artifacts/*, lib/*, scripts) MUST stay.
+.agents/
+.replit
+.replitignore
+replit.nix
+replit.md
+uv.lock
+pyproject.toml
+main.py
+you
+.rules
+. Rules 

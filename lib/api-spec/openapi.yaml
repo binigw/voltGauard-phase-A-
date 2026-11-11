@@ -1,0 +1,1598 @@
+openapi: 3.1.0
+info:
+  title: Api
+  version: 0.1.0
+  description: VoltGuard AI API - Industrial Motor Protection System
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: motors
+    description: Motor registry management
+  - name: alerts
+    description: Real-time alert management
+  - name: faults
+    description: Fault log and AI analysis
+  - name: personnel
+    description: Technician and personnel management
+  - name: telemetry
+    description: Motor telemetry ingestion
+  - name: system
+    description: System-wide health and analytics
+  - name: notifications
+    description: Push notification (FCM) and Telegram integration
+  - name: training-data
+    description: ML training dataset collection and export (Phase 1)
+
+paths:
+  /training-data/stats:
+    get:
+      operationId: getTrainingDataStats
+      tags: [training-data]
+      summary: Training dataset collection summary
+      description: Returns total sample count, date range, fault-label distribution, severity distribution, relay-trip count, and per-motor breakdown. Read-only.
+      responses:
+        "200":
+          description: Collection statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrainingDataStats"
+
+  /training-data/export.csv:
+    get:
+      operationId: exportTrainingDataCsv
+      tags: [training-data]
+      summary: Download full training dataset as CSV
+      description: |
+        Returns a UTF-8 CSV file containing every captured training sample, sorted
+        ascending by capture timestamp. Suitable for direct import into scikit-learn,
+        XGBoost, or any tabular ML framework.
+
+        **CSV columns (in order):**
+        id, captured_at, source, motor_id, motor_name, motor_type, motor_location,
+        current_amps, frequency_hz, thd_pct, noise_db, vibration_db, anomaly_score,
+        health_score, derived_status, fault_label, relay_tripped, alert_severity,
+        days_to_failure
+
+        **Optional query filters:**
+        - `motorId` — restrict to a single motor
+        - `from` / `to` — ISO 8601 timestamps for time range
+        - `relayTripped` — `true` to export only emergency-trip events
+        - `source` — filter by ingestion source (e.g. `telemetry_update`)
+      parameters:
+        - name: motorId
+          in: query
+          schema: { type: integer }
+          description: Filter by motor ID
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+          description: Start of capture window (ISO 8601)
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
+          description: End of capture window (ISO 8601)
+        - name: relayTripped
+          in: query
+          schema: { type: boolean }
+          description: If true, return only rows where the relay was tripped
+        - name: source
+          in: query
+          schema: { type: string }
+          description: Filter by ingestion source identifier
+      responses:
+        "200":
+          description: CSV file download
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /system/summary:
+    get:
+      operationId: getSystemSummary
+      tags: [system]
+      summary: Dashboard summary stats
+      responses:
+        "200":
+          description: System summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemSummary"
+
+  /motors:
+    get:
+      operationId: listMotors
+      tags: [motors]
+      summary: List all motors
+      responses:
+        "200":
+          description: List of motors
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Motor"
+    post:
+      operationId: createMotor
+      tags: [motors]
+      summary: Register a new motor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MotorInput"
+      responses:
+        "201":
+          description: Motor created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Motor"
+
+  /motors/{id}:
+    get:
+      operationId: getMotor
+      tags: [motors]
+      summary: Get a single motor
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Motor detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Motor"
+        "404":
+          description: Not found
+    patch:
+      operationId: updateMotor
+      tags: [motors]
+      summary: Update motor details
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MotorUpdate"
+      responses:
+        "200":
+          description: Motor updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Motor"
+    delete:
+      operationId: deleteMotor
+      tags: [motors]
+      summary: Remove a motor
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  /alerts/live:
+    get:
+      operationId: getLiveAlerts
+      tags: [alerts]
+      summary: Get all active (unacknowledged) alerts
+      responses:
+        "200":
+          description: Active alerts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Alert"
+
+  /alerts:
+    get:
+      operationId: listAlerts
+      tags: [alerts]
+      summary: List all alerts with optional filters
+      parameters:
+        - name: severity
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: acknowledged
+          in: query
+          required: false
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: Alerts list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Alert"
+
+  /alerts/{id}/acknowledge:
+    post:
+      operationId: acknowledgeAlert
+      tags: [alerts]
+      summary: Acknowledge an alert
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Alert acknowledged
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Alert"
+
+  /faults:
+    get:
+      operationId: listFaults
+      tags: [faults]
+      summary: List all fault logs
+      responses:
+        "200":
+          description: Fault logs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/FaultLog"
+
+  /faults/{id}:
+    get:
+      operationId: getFault
+      tags: [faults]
+      summary: Get fault with full AI analysis
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Fault detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FaultLog"
+    delete:
+      operationId: deleteFault
+      tags: [faults]
+      summary: Remove a fault log
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  /faults/{id}/analyze:
+    post:
+      operationId: analyzeFault
+      tags: [faults]
+      summary: Request fresh AI analysis for a fault
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: AI analysis result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FaultLog"
+
+  /personnel:
+    get:
+      operationId: listPersonnel
+      tags: [personnel]
+      summary: List all technicians
+      responses:
+        "200":
+          description: Personnel list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Personnel"
+    post:
+      operationId: createPersonnel
+      tags: [personnel]
+      summary: Add a technician
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PersonnelInput"
+      responses:
+        "201":
+          description: Personnel created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Personnel"
+
+  /personnel/{id}:
+    patch:
+      operationId: updatePersonnel
+      tags: [personnel]
+      summary: Update technician record
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PersonnelUpdate"
+      responses:
+        "200":
+          description: Updated personnel
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Personnel"
+    delete:
+      operationId: deletePersonnel
+      tags: [personnel]
+      summary: Remove a technician
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  /telemetry/live-ingest:
+    post:
+      operationId: liveIngestTelemetry
+      tags: [telemetry]
+      summary: High-frequency raw telemetry ingestion for training data collection
+      description: |
+        Lightweight ingestion endpoint designed for high-frequency sensor streams.
+        Runs the full rule-engine label computation (anomaly score, health score,
+        fault classification, relay logic) so every sample is fully labelled, but
+        does NOT write alerts, fault logs, motor state, or send any notifications.
+        Every packet is stored as a training sample (fire-and-forget, non-blocking).
+        Use this endpoint for bulk data collection without side-effects.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TelemetryInput"
+      responses:
+        "202":
+          description: Telemetry accepted for training capture
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LiveIngestResult"
+        "400":
+          description: Invalid input
+        "404":
+          description: Motor not found
+
+  /telemetry/update:
+    post:
+      operationId: updateTelemetry
+      tags: [telemetry]
+      summary: Push motor telemetry snapshot (adaptive frequency)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TelemetryInput"
+      responses:
+        "200":
+          description: Telemetry accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TelemetryResult"
+
+  /telemetry/history:
+    get:
+      operationId: getTelemetryHistory
+      tags: [telemetry]
+      summary: Auditable telemetry windows for advanced analysis
+      parameters:
+        - name: motorId
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: hours
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 720
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+      responses:
+        "200":
+          description: Persisted telemetry points with provenance and safety triggers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AnalysisTelemetryPoint"
+
+  /telemetry/explain:
+    post:
+      operationId: explainTelemetryWindow
+      tags: [telemetry]
+      summary: Explain the exact displayed telemetry window
+      description: |
+        Explanation-only endpoint. The verified decision fields remain authoritative;
+        snapshotWindow is echoed for commercial audit traceability and cannot change
+        the safety or ML decision.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TelemetryExplainRequest"
+      responses:
+        "200":
+          description: Bilingual explanation plus echoed audit window
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      audit:
+                        $ref: "#/components/schemas/TelemetryAudit"
+                    required: [audit]
+                  - type: object
+                    description: Explanation response
+        "400":
+          description: Invalid or incomplete snapshot window
+
+  /notifications/register-token:
+    post:
+      operationId: registerFcmToken
+      tags: [notifications]
+      summary: Register a browser FCM push token for a personnel member
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterFcmTokenInput"
+      responses:
+        "200":
+          description: Token registered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  personnelId:
+                    type: integer
+                required: [ok, personnelId]
+        "400":
+          description: Missing personnelId or token
+        "404":
+          description: Personnel not found
+
+  /notifications/register-token/{personnelId}:
+    delete:
+      operationId: unregisterFcmToken
+      tags: [notifications]
+      summary: Remove a personnel member's FCM push token
+      parameters:
+        - name: personnelId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Token removed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                required: [ok]
+
+  /notifications/status:
+    get:
+      operationId: getNotificationsStatus
+      tags: [notifications]
+      summary: Health check for Telegram and Firebase integrations
+      responses:
+        "200":
+          description: Notification integrations status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationsStatus"
+
+  /notifications/test-alert:
+    post:
+      operationId: sendTestAlert
+      tags: [notifications]
+      summary: Send a real test alert through configured notification channels
+      description: |
+        Sends a clearly labelled test alert through Firebase and Telegram to one
+        personnel member, or to all registered personnel when personnelId is omitted.
+        This endpoint has no motor, fault, relay, or telemetry side effects.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TestAlertInput"
+      responses:
+        "200":
+          description: Test alert delivery results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestAlertResponse"
+        "404":
+          description: Personnel not found
+
+  /analytics/trends:
+    get:
+      operationId: getAnalyticsTrends
+      tags: [system]
+      summary: Time-series trend data for charts
+      parameters:
+        - name: motorId
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: hours
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Trend data
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TrendPoint"
+
+components:
+  schemas:
+    TrainingDataStats:
+      type: object
+      description: |
+        Full dataset health dashboard for Phase 1 training data collection.
+        Reports total volume, class balance, motor coverage, per-class sufficiency,
+        and a training-readiness gate (isReadyForTraining).
+      properties:
+        totalSamples:
+          type: integer
+          description: Total rows in training_samples.
+
+        dateRange:
+          nullable: true
+          type: object
+          properties:
+            earliest: { type: string, format: date-time }
+            latest:   { type: string, format: date-time }
+          required: [earliest, latest]
+
+        # ── Class balance ──────────────────────────────────────────────────
+        healthySamples:
+          type: integer
+          description: Rows labelled "Normal".
+        faultSamples:
+          type: integer
+          description: Rows labelled with any fault class (non-Normal).
+        healthyVsFaultRatio:
+          type: ["number", "null"]
+          description: |
+            healthySamples / faultSamples. Null when faultSamples = 0.
+            Target range for balanced training: 0.8 – 1.5.
+
+        # ── Label & severity distributions ────────────────────────────────
+        labelDistribution:
+          type: object
+          description: Count of samples per fault label.
+          additionalProperties: { type: integer }
+        severityDistribution:
+          type: object
+          description: Count of samples per alert severity (none / medium / high).
+          additionalProperties: { type: integer }
+        relayTripCount:
+          type: integer
+          description: Rows where emergency relay trip fired.
+
+        # ── Motor coverage ────────────────────────────────────────────────
+        motorCoverage:
+          type: object
+          description: How many of the registered motors have contributed samples.
+          properties:
+            totalMotors:         { type: integer }
+            representedMotors:   { type: integer }
+            unrepresentedMotors: { type: integer }
+            coveragePct:         { type: number, description: "0–100 %" }
+            unrepresentedList:
+              type: array
+              items:
+                type: object
+                properties:
+                  motorId:   { type: integer }
+                  motorName: { type: string }
+                required: [motorId, motorName]
+          required: [totalMotors, representedMotors, unrepresentedMotors, coveragePct, unrepresentedList]
+
+        # ── Per-motor breakdown ───────────────────────────────────────────
+        motorBreakdown:
+          type: array
+          description: Sample counts per motor, sorted by motorId.
+          items:
+            type: object
+            properties:
+              motorId:       { type: integer }
+              motorName:     { type: string }
+              count:         { type: integer }
+              latestCapture: { type: string, format: date-time }
+            required: [motorId, motorName, count, latestCapture]
+
+        # ── Class coverage against the 6 target classes ───────────────────
+        classCoverage:
+          type: array
+          description: |
+            Per-class sample count and sufficiency flag for each of the 6
+            expected fault classes: Normal, Bearing Wear, High THD, High
+            Vibration, Phase Imbalance, Overcurrent.
+          items:
+            type: object
+            properties:
+              class:                 { type: string }
+              samples:               { type: integer }
+              sufficientForTraining: { type: boolean }
+            required: [class, samples, sufficientForTraining]
+
+        classesReadyCount:
+          type: integer
+          description: Number of classes that have reached minSamplesPerClass.
+        totalExpectedClasses:
+          type: integer
+          description: Always 6 for the current Phase 1 target.
+        minSamplesPerClass:
+          type: integer
+          description: Minimum samples required per class before model training is allowed.
+
+        # ── Training readiness gate ───────────────────────────────────────
+        isReadyForTraining:
+          type: boolean
+          description: |
+            True only when ALL of: every class has ≥ minSamplesPerClass samples,
+            and motor coverage ≥ 80 %. Do not start model training until this is true.
+
+      required:
+        - totalSamples
+        - healthySamples
+        - faultSamples
+        - healthyVsFaultRatio
+        - labelDistribution
+        - severityDistribution
+        - relayTripCount
+        - motorCoverage
+        - motorBreakdown
+        - classCoverage
+        - classesReadyCount
+        - totalExpectedClasses
+        - minSamplesPerClass
+        - isReadyForTraining
+
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required: [status]
+
+    SystemSummary:
+      type: object
+      properties:
+        totalMotors:
+          type: integer
+        runningCount:
+          type: integer
+        warningCount:
+          type: integer
+        stoppedCount:
+          type: integer
+        averageHealthScore:
+          type: number
+        activeAlertCount:
+          type: integer
+        highPriorityAlerts:
+          type: integer
+        mediumPriorityAlerts:
+          type: integer
+        predictiveRisk:
+          type: string
+        predictiveRiskDetail:
+          type: string
+        healthTrend:
+          type: ["number", "null"]
+          description: Average health score change versus the preceding 7-day telemetry history. Null when no prior-week history exists.
+      required:
+        - totalMotors
+        - runningCount
+        - warningCount
+        - stoppedCount
+        - averageHealthScore
+        - activeAlertCount
+        - highPriorityAlerts
+        - mediumPriorityAlerts
+        - predictiveRisk
+        - predictiveRiskDetail
+        - healthTrend
+
+    Motor:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        location:
+          type: string
+        motorType:
+          type: string
+        status:
+          type: string
+          enum: [running, warning, stopped]
+        healthScore:
+          type: integer
+        currentThd:
+          type: number
+        currentDb:
+          type: number
+        anomalyScore:
+          type: number
+          deprecated: true
+          description: |
+            Deprecated compatibility field. This is the inverse of the
+            smoothed health score and is not an Isolation Forest score. Use
+            decisionIfAnomalyScore instead.
+        decisionAnomalyDetected:
+          type: boolean
+          description: True when the latest final Decision Engine fault label is non-Normal.
+        daysToFailure:
+          type: ["integer", "null"]
+          description: Reserved for Survival Model output; null until that model is integrated.
+        decisionFaultLabel:
+          type: ["string", "null"]
+          description: Latest Decision Engine fault label for this motor.
+        decisionFaultConfidence:
+          type: ["number", "null"]
+          description: Latest Decision Engine confidence for the motor fault label [0..1].
+        decisionMlActive:
+          type: ["boolean", "null"]
+          description: Whether the latest Decision Engine result used the ML models.
+        decisionEmergencyTrip:
+          type: ["boolean", "null"]
+          description: Whether the latest Decision Engine result triggered the emergency relay.
+        decisionOverrideFired:
+          type: ["boolean", "null"]
+          description: Whether the latest result was changed by a fail-safe override.
+        decisionOverrideReason:
+          type: ["string", "null"]
+          description: Machine-readable reason for the latest Decision Engine override.
+        decisionIfAnomalyScore:
+          type: ["number", "null"]
+          description: Latest Isolation Forest anomaly score.
+        decisionRfTopClass:
+          type: ["string", "null"]
+          description: Latest Random Forest shadow-model class.
+        decisionXgbTopClass:
+          type: ["string", "null"]
+          description: Latest XGBoost primary-model class.
+        decisionModelsAgreed:
+          type: ["boolean", "null"]
+          description: Whether the latest classifier models agreed.
+        decisionOriginalMlClass:
+          type: ["string", "null"]
+          description: Latest class before fail-safe override.
+        decisionOriginalMlConf:
+          type: ["number", "null"]
+          description: Latest confidence before fail-safe override [0..1].
+        decisionUpdatedAt:
+          type: ["string", "null"]
+          format: date-time
+          description: Timestamp of the latest Decision Engine result.
+        installedAt:
+          type: string
+        lastServiceAt:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+      required:
+        - id
+        - name
+        - location
+        - motorType
+        - status
+        - healthScore
+        - currentThd
+        - currentDb
+        - anomalyScore
+        - decisionAnomalyDetected
+        - daysToFailure
+        - decisionFaultLabel
+        - decisionFaultConfidence
+        - decisionMlActive
+        - decisionEmergencyTrip
+        - decisionOverrideFired
+        - decisionOverrideReason
+        - decisionIfAnomalyScore
+        - decisionRfTopClass
+        - decisionXgbTopClass
+        - decisionModelsAgreed
+        - decisionOriginalMlClass
+        - decisionOriginalMlConf
+        - decisionUpdatedAt
+        - installedAt
+        - lastServiceAt
+        - createdAt
+
+    MotorInput:
+      type: object
+      properties:
+        name:
+          type: string
+        location:
+          type: string
+        motorType:
+          type: string
+        status:
+          type: string
+          enum: [running, warning, stopped]
+        healthScore:
+          type: integer
+        currentThd:
+          type: number
+        currentDb:
+          type: number
+        installedAt:
+          type: string
+      required:
+        - name
+        - location
+        - motorType
+
+    MotorUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        location:
+          type: string
+        motorType:
+          type: string
+        status:
+          type: string
+          enum: [running, warning, stopped]
+        healthScore:
+          type: integer
+        currentThd:
+          type: number
+        currentDb:
+          type: number
+        lastServiceAt:
+          type: string
+
+    Alert:
+      type: object
+      properties:
+        id:
+          type: integer
+        motorId:
+          type: integer
+        motorName:
+          type: string
+        faultType:
+          type: string
+        severity:
+          type: string
+          enum: [high, medium, low]
+        message:
+          type: string
+        acknowledged:
+          type: boolean
+        acknowledgedAt:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+      required:
+        - id
+        - motorId
+        - motorName
+        - faultType
+        - severity
+        - message
+        - acknowledged
+        - acknowledgedAt
+        - createdAt
+
+    FaultLog:
+      type: object
+      properties:
+        id:
+          type: integer
+        motorId:
+          type: integer
+        motorName:
+          type: string
+        faultType:
+          type: string
+        severity:
+          type: string
+          enum: [critical, high, medium, low]
+        description:
+          type: string
+        possibleCauses:
+          type: array
+          items:
+            type: string
+        riskIfIgnored:
+          type: array
+          items:
+            type: string
+        recommendedActions:
+          type: array
+          items:
+            type: string
+        anomalyScore:
+          type: number
+          deprecated: true
+          description: |
+            Deprecated compatibility field. This is the inverse of the
+            smoothed health score and is not an Isolation Forest score. Use
+            ifAnomalyScore instead.
+        ifAnomalyScore:
+          type: ["number", "null"]
+          description: Actual Isolation Forest anomaly score; null for rule-only historical rows.
+        anomalyDetected:
+          type: boolean
+          description: True when the persisted fault label is non-Normal.
+        healthScore:
+          type: integer
+          description: Canonical Health Score [0..100] computed by computeHealthScore() at fault time. This is the single source of truth.
+        thdAtFault:
+          type: number
+        dbAtFault:
+          type: number
+        resolved:
+          type: boolean
+        resolvedAt:
+          type: ["string", "null"]
+        detectedAt:
+          type: string
+        explanationSource:
+          type: string
+          enum: [deepseek, openai, fallback]
+          description: Source of the most recent on-demand explanation request, when applicable.
+      required:
+        - id
+        - motorId
+        - motorName
+        - faultType
+        - severity
+        - description
+        - possibleCauses
+        - riskIfIgnored
+        - recommendedActions
+        - anomalyScore
+        - ifAnomalyScore
+        - anomalyDetected
+        - healthScore
+        - thdAtFault
+        - dbAtFault
+        - resolved
+        - resolvedAt
+        - detectedAt
+
+    Personnel:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        role:
+          type: string
+        teamName:
+          type: string
+        contact:
+          type: string
+        telegramId:
+          type: ["string", "null"]
+        telegramChatId:
+          type: ["string", "null"]
+        fcmToken:
+          type: ["string", "null"]
+        assignedMotorIds:
+          type: array
+          items:
+            type: integer
+        createdAt:
+          type: string
+      required:
+        - id
+        - name
+        - role
+        - teamName
+        - contact
+        - telegramId
+        - telegramChatId
+        - fcmToken
+        - assignedMotorIds
+        - createdAt
+
+    PersonnelInput:
+      type: object
+      properties:
+        name:
+          type: string
+        role:
+          type: string
+        teamName:
+          type: string
+        contact:
+          type: string
+        telegramId:
+          type: string
+        assignedMotorIds:
+          type: array
+          items:
+            type: integer
+      required:
+        - name
+        - role
+        - teamName
+        - contact
+
+    PersonnelUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        role:
+          type: string
+        teamName:
+          type: string
+        contact:
+          type: string
+        telegramId:
+          type: string
+        assignedMotorIds:
+          type: array
+          items:
+            type: integer
+
+    TelemetryInput:
+      type: object
+      properties:
+        motorId:
+          type: integer
+        current:
+          type: number
+        phase_currents_a:
+          type: array
+          minItems: 3
+          maxItems: 3
+          items:
+            type: number
+          description: Optional three-phase RMS current values in amperes.
+        phase_voltages_v:
+          type: array
+          minItems: 3
+          maxItems: 3
+          items:
+            type: number
+          description: Optional three-phase voltage values in volts.
+        mcsa_harmonic_frequencies_hz:
+          type: array
+          minItems: 2
+          maxItems: 16
+          items:
+            type: number
+          description: Optional MCSA current-signature frequencies, including bearing sidebands.
+        mcsa_harmonic_magnitudes:
+          type: array
+          minItems: 2
+          maxItems: 16
+          items:
+            type: number
+          description: Optional magnitudes paired with mcsa_harmonic_frequencies_hz.
+        mcsa_bearing_fault_frequency_hz:
+          type: number
+          description: Optional bearing fault modulation frequency used for sideband offset.
+        raw_waveform:
+          type: array
+          minItems: 2
+          maxItems: 20000
+          items:
+            type: number
+          description: Optional verified sampled current waveform. Its presence authorizes FFT/MCSA rendering.
+        thd:
+          type: number
+        db:
+          type: ["number", "null"]
+          description: Optional sound/vibration level in dB; missing, null, and 0 are imputed to the nominal 60 dB baseline.
+        frequency:
+          type: number
+        timestamp:
+          type: ["string", "null"]
+        is_simulation:
+          type: boolean
+          description: Required marker for simulated telemetry packets.
+        telemetry_source:
+          type: string
+          description: Provenance label; simulation packets must use SIMULATION.
+        operating_mode:
+          type: string
+          enum: [DOL, "Soft Starter", VFD]
+          description: Motor starter/drive operating mode used by adaptive starter masking.
+      required:
+        - motorId
+        - current
+        - thd
+
+    LiveIngestResult:
+      type: object
+      description: Lightweight acknowledgment returned by /telemetry/live-ingest.
+      properties:
+        accepted:
+          type: boolean
+          description: Always true when the packet was accepted.
+        motorId:
+          type: integer
+        anomalyScore:
+          type: number
+          description: Anomaly score computed for labelling purposes only.
+        faultLabel:
+          type: string
+          description: Rule-engine fault classification applied as training label.
+        relayTripped:
+          type: boolean
+          description: Whether the relay-trip rule fired (label only — no relay action taken).
+      required: [accepted, motorId, anomalyScore, faultLabel, relayTripped]
+
+    TelemetryResult:
+      type: object
+      properties:
+        motorId:
+          type: integer
+        telemetryId:
+          type: ["integer", "null"]
+          description: ID of the persisted telemetry row.
+        telemetryPersisted:
+          type: boolean
+          description: Whether the telemetry row was written successfully.
+        featureCount:
+          type: ["integer", "null"]
+          description: Number of features accepted by the active model pipeline.
+        modelVersion:
+          type: ["string", "null"]
+          description: Active validated model manifest version.
+        finalDecision:
+          type: string
+          description: Final Decision Engine label persisted for this snapshot.
+        overrideFault:
+          type: boolean
+          description: Whether a safety rule overrode the raw ML result.
+        isSimulation:
+          type: boolean
+          description: Whether this telemetry snapshot was explicitly marked as a simulation.
+        telemetrySource:
+          type: string
+          description: Provenance label persisted with this telemetry snapshot.
+        anomalyScore:
+          type: number
+          deprecated: true
+          description: Deprecated compatibility value; use ifAnomalyScore instead.
+        ifAnomalyScore:
+          type: ["number", "null"]
+          description: Actual Isolation Forest anomaly score; null when ML inference was unavailable.
+        healthScore:
+          type: integer
+          description: Canonical Health Score [0..100] as computed by computeHealthScore() and stored in motorsTable. Single source of truth.
+        anomalyDetected:
+          type: boolean
+        nextLogIntervalSeconds:
+          type: integer
+        severity:
+          type: string
+        emergencyTrip:
+          type: boolean
+          description: Whether the emergency relay decision fired for this telemetry snapshot.
+        status:
+          type: string
+          enum: [running, warning, stopped]
+          description: Dashboard status derived from relay state, final fault label, and health score.
+        message:
+          type: string
+        faultLabel:
+          type: string
+          description: Final fault label selected by the Decision Engine.
+        faultConfidence:
+          type: number
+          description: Decision Engine confidence for the final fault label [0..1].
+        mlActive:
+          type: boolean
+          description: Whether the ML models were used instead of the full rule-engine fallback.
+        overrideFired:
+          type: boolean
+          description: Whether a sensor or relay fail-safe override changed the ML result.
+        overrideReason:
+          type: string
+          description: Machine-readable reason for a Decision Engine override.
+        rfTopClass:
+          type: string
+          description: Random Forest shadow-model top class.
+        xgbTopClass:
+          type: string
+          description: XGBoost primary-model top class.
+        modelsAgreed:
+          type: boolean
+          description: Whether the classifier models selected the same class.
+        originalMlClass:
+          type: string
+          description: Class selected before any fail-safe override.
+        originalMlConf:
+          type: number
+          description: Confidence selected before any fail-safe override [0..1].
+      required:
+        - motorId
+        - telemetryId
+        - telemetryPersisted
+        - featureCount
+        - modelVersion
+        - finalDecision
+        - overrideFault
+        - isSimulation
+        - telemetrySource
+        - anomalyScore
+        - healthScore
+        - anomalyDetected
+        - nextLogIntervalSeconds
+        - severity
+        - emergencyTrip
+        - status
+        - message
+        - faultLabel
+        - faultConfidence
+        - mlActive
+        - overrideFired
+        - overrideReason
+        - ifAnomalyScore
+        - rfTopClass
+        - xgbTopClass
+        - modelsAgreed
+        - originalMlClass
+        - originalMlConf
+
+    TrendPoint:
+      type: object
+      properties:
+        timestamp:
+          type: string
+        motorId:
+          type: integer
+        motorName:
+          type: string
+        current:
+          type: number
+        thd:
+          type: number
+        db:
+          type: number
+        anomalyScore:
+          type: number
+          deprecated: true
+          description: Deprecated compatibility field; use ifAnomalyScore instead.
+        ifAnomalyScore:
+          type: ["number", "null"]
+          description: Actual Isolation Forest anomaly score; null for simulator/rule-only telemetry.
+        anomalyDetected:
+          type: boolean
+          description: True when the final Decision Engine result is non-Normal.
+        healthScore:
+          type: integer
+      required:
+        - timestamp
+        - motorId
+        - motorName
+        - current
+        - thd
+        - db
+        - anomalyScore
+        - ifAnomalyScore
+        - anomalyDetected
+        - healthScore
+
+    AnalysisSafetyTrigger:
+      type: object
+      properties:
+        code:
+          type: string
+          enum: [overcurrent, high_thd, high_vibration]
+        label:
+          type: string
+        threshold:
+          type: string
+        value:
+          type: number
+        traceId:
+          type: string
+      required: [code, label, threshold, value, traceId]
+
+    AnalysisTelemetryPoint:
+      type: object
+      description: |
+        Persisted, point-in-time telemetry for the advanced analysis page.
+        Null means the sensor or model did not provide that measurement.
+      properties:
+        id: { type: integer }
+        motorId: { type: integer }
+        motorName: { type: string }
+        timestamp: { type: string, format: date-time }
+        traceId: { type: string }
+        isSimulation: { type: boolean }
+        telemetrySource: { type: string }
+        current: { type: number, nullable: true }
+        thd: { type: number, nullable: true }
+        db: { type: number, nullable: true }
+        frequency: { type: number, nullable: true }
+        phaseCurrentsA:
+          type: array
+          nullable: true
+          items: { type: number }
+        phaseVoltagesV:
+          type: array
+          nullable: true
+          items: { type: number }
+         mcsaHarmonicFrequenciesHz:
+           type: array
+           nullable: true
+           items: { type: number }
+         mcsaHarmonicMagnitudes:
+           type: array
+           nullable: true
+           items: { type: number }
+         mcsaBearingFaultFrequencyHz: { type: number, nullable: true }
+        rawWaveform:
+          type: array
+          nullable: true
+          items: { type: number }
+        safetyTriggers:
+          type: array
+          items:
+            $ref: "#/components/schemas/AnalysisSafetyTrigger"
+        finalDecision: { type: string, nullable: true }
+        faultConfidence: { type: number, nullable: true }
+        ifAnomalyScore: { type: number, nullable: true }
+        anomalyDetected: { type: boolean }
+        healthScore: { type: number, nullable: true }
+        severity: { type: string, nullable: true }
+        status: { type: string, nullable: true }
+        emergencyTrip: { type: boolean }
+        overrideFault: { type: boolean }
+        overrideReason: { type: string }
+        rfTopClass: { type: string, nullable: true }
+        xgbTopClass: { type: string, nullable: true }
+        modelsAgreed: { type: boolean, nullable: true }
+        measurementMode:
+          type: string
+           enum: [raw_waveform, mcsa_spectral, scalar_electrical]
+      required:
+        - id
+        - motorId
+        - motorName
+        - timestamp
+        - traceId
+        - isSimulation
+        - telemetrySource
+        - current
+        - thd
+        - db
+        - frequency
+        - phaseCurrentsA
+        - phaseVoltagesV
+         - mcsaHarmonicFrequenciesHz
+         - mcsaHarmonicMagnitudes
+         - mcsaBearingFaultFrequencyHz
+        - rawWaveform
+        - safetyTriggers
+        - finalDecision
+        - faultConfidence
+        - ifAnomalyScore
+        - anomalyDetected
+        - healthScore
+        - severity
+        - status
+        - emergencyTrip
+        - overrideFault
+        - overrideReason
+        - rfTopClass
+        - xgbTopClass
+        - modelsAgreed
+        - measurementMode
+
+    TelemetryExplainRequest:
+      type: object
+      properties:
+        snapshot:
+          type: object
+          description: Verified active graph point, including its traceId.
+        snapshotWindow:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items:
+            $ref: "#/components/schemas/AnalysisTelemetryPoint"
+      required: [snapshot, snapshotWindow]
+
+    TelemetryAudit:
+      type: object
+      properties:
+        traceId: { type: string }
+        pointCount: { type: integer }
+        windowStart: { type: string, format: date-time }
+        windowEnd: { type: string, format: date-time }
+        traceIds:
+          type: array
+          items: { type: string }
+      required: [traceId, pointCount, windowStart, windowEnd, traceIds]
+
+    RegisterFcmTokenInput:
+      type: object
+      properties:
+        personnelId:
+          type: integer
+        token:
+          type: string
+      required:
+        - personnelId
+        - token
+
+    NotificationsStatus:
+      type: object
+      properties:
+        telegram:
+          type: object
+          properties:
+            configured:
+              type: boolean
+            registeredTechnicians:
+              type: integer
+            totalTechnicians:
+              type: integer
+          required: [configured, registeredTechnicians, totalTechnicians]
+        firebase:
+          type: object
+          properties:
+            configured:
+              type: boolean
+            registeredTokens:
+              type: integer
+          required: [configured, registeredTokens]
+      required:
+        - telegram
+        - firebase
+
+    TestAlertInput:
+      type: object
+      properties:
+        personnelId:
+          type: integer
+          description: Optional personnel recipient. Omit to target all registered personnel.
+
+    TestAlertResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        recipientsConsidered:
+          type: integer
+        fcm:
+          type: object
+          properties:
+            tokensTargeted:
+              type: integer
+            successCount:
+              type: integer
+            failureCount:
+              type: integer
+          required: [tokensTargeted, successCount, failureCount]
+        telegram:
+          type: object
+          properties:
+            chatsTargeted:
+              type: integer
+            successCount:
+              type: integer
+          required: [chatsTargeted, successCount]
+      required: [ok, recipientsConsidered, fcm, telegram]

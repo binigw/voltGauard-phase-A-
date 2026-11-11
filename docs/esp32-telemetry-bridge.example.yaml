@@ -1,0 +1,87 @@
+# Example commissioning profile for an edge bridge.
+# This is configuration documentation for a serial/MQTT -> HTTP adapter.
+# The current VoltGuard API does not consume MQTT or serial directly.
+# Do not place passwords, private keys, or broker credentials in this file.
+
+asset:
+  motor_id: 25
+  asset_tag: MTR-0025
+  motor_name: Flour mill
+  operating_mode: DOL
+
+transport:
+  # Select exactly one: mqtt or serial.
+  input: mqtt
+
+  mqtt:
+    broker_url: mqtts://BROKER_HOSTNAME:8883
+    client_id: voltguard-edge-mtr-0025
+    topic: voltguard/mtr-0025/telemetry
+    qos: 1
+    retain: false
+    clean_session: false
+    keepalive_seconds: 30
+    ca_file: /etc/voltguard/certs/mqtt-ca.pem
+    client_cert_file: /etc/voltguard/certs/mtr-0025-client.crt
+    client_key_file: /etc/voltguard/certs/mtr-0025-client.key
+
+  serial:
+    device: /dev/ttyUSB0
+    baud: 115200
+    data_bits: 8
+    parity: none
+    stop_bits: 1
+    framing: jsonl
+    max_frame_bytes: 4096
+    read_timeout_ms: 1500
+
+forward:
+  api_base_url: http://VOLTGUARD_API_HOST:8080
+  endpoint: /api/telemetry/update
+  connect_timeout_ms: 1000
+  request_timeout_ms: 3000
+  max_retries: 2
+  retry_backoff_ms: [250, 1000]
+  max_offline_queue_items: 600
+  # Queue only transient transport/server errors. Never retry schema errors.
+  queue_statuses: [408, 429, 500, 502, 503, 504]
+  reject_statuses: [400, 401, 403, 404]
+
+measurement:
+  # Current RMS values are I1/L1, I2/L2, I3/L3 in this exact order.
+  phase_order: [L1, L2, L3]
+  current_aggregation: arithmetic_mean_of_three_validated_phase_rms
+  phase_current_min_a: 0.0
+  phase_current_max_a: 400.0
+  require_three_phase_currents_when_running: true
+  require_measured_thd: true
+  allow_db_null: true
+  allow_voltage_omission: true
+  timestamp: utc_rfc3339_after_ntp_sync
+
+calibration:
+  # Replace these placeholders from the actual CT/ADC datasheets and
+  # signed calibration record. Never use these values without validation.
+  ct_primary_rating_a: REPLACE_FROM_DATASHEET
+  ct_secondary_rating_a: REPLACE_FROM_DATASHEET
+  burden_ohms: REPLACE_FROM_DATASHEET
+  adc_reference_v: REPLACE_FROM_BOARD_CALIBRATION
+  adc_midpoint_v: REPLACE_FROM_BOARD_CALIBRATION
+  rms_window_cycles: REPLACE_WITH_VALIDATED_VALUE
+  waveform_sample_rate_hz: REPLACE_WITH_VALIDATED_VALUE
+  calibration_record: REPLACE_WITH_SIGNED_RECORD_ID
+
+payload_defaults:
+  is_simulation: false
+  telemetry_source: ESP32_MQTT
+
+quality:
+  reject_nan_and_infinity: true
+  reject_negative_rms: true
+  reject_wrong_phase_count: true
+  reject_stale_timestamp: true
+  reject_duplicate_sequence: true
+  omit_phase_arrays_while_motor_stopped: true
+  never_fill_unmeasured_thd_with_zero: true
+  never_fill_unmeasured_db_with_zero: true
+  never_generate_raw_waveform_from_rms: true
